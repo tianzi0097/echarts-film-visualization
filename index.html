@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>影视商业回报与受众分析仪表盘</title>
+    <!-- 引入 ECharts 核心库 -->
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+    <style>
+        body { margin: 0; padding: 0; background-color: #101424; color: #fff; font-family: 'Microsoft YaHei', sans-serif; }
+        .header { text-align: center; padding: 15px 0; font-size: 24px; font-weight: bold; background-color: #1c223a; position: relative; }
+        
+        /* 按钮容器与样式 */
+        .btn-group { position: absolute; top: 15px; right: 20px; display: flex; gap: 10px; }
+        .action-btn { padding: 6px 15px; background-color: #50a3ba; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: bold; transition: background 0.3s;}
+        .action-btn:hover { background-color: #3b8498; }
+        
+        /* 1大2小 不对称网格布局 */
+        #dashboard { display: grid; grid-template-columns: 60% 40%; grid-template-rows: 50vh 40vh; gap: 10px; padding: 10px; }
+        .chart-container { background-color: #1a2035; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.3); padding: 10px; position: relative; }
+        #scatter-box { grid-row: 1 / 3; grid-column: 1 / 2; }
+        #treemap-box { grid-row: 1 / 2; grid-column: 2 / 3; }
+        #line-box { grid-row: 2 / 3; grid-column: 2 / 3; }
+        .chart { width: 100%; height: 100%; }
+        
+        /* 无数据时的遮罩提示语 */
+        .no-data-mask { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #50a3ba; font-size: 18px; font-weight: bold; pointer-events: none; display: none; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        多维影视商业回报与受众分析仪表盘 (Visual Analytics Dashboard)
+        <div class="btn-group">
+            <input type="file" id="fileInput" accept=".csv" style="display:none;" />
+            <button id="importBtn" class="action-btn">导入数据集 (CSV)</button>
+            <button id="exportBtn" class="action-btn">导出当前数据</button>
+        </div>
+    </div>
+    <div id="dashboard">
+        <!-- 图表A：多维气泡散点图 -->
+        <div class="chart-container" id="scatter-box">
+            <div id="scatter" class="chart"></div>
+            <div class="no-data-mask" id="mask-scatter">请导入数据集</div>
+        </div>
+        <!-- 图表B：矩形树图 -->
+        <div class="chart-container" id="treemap-box">
+            <div id="treemap" class="chart"></div>
+            <div class="no-data-mask" id="mask-treemap">请导入数据集</div>
+        </div>
+        <!-- 图表C：双轴折线图 -->
+        <div class="chart-container" id="line-box">
+            <div id="line" class="chart"></div>
+            <div class="no-data-mask" id="mask-line">请导入数据集</div>
+        </div>
+    </div>
+
+    <script>
+        // --- 1. 数据初始化：默认为空，并尝试从 LocalStorage 读取上次保存的数据 ---
+        let rawData = [];
+        const LOCAL_STORAGE_KEY = 'saved_movies_dataset';
+        
+        try {
+            const savedData = localStorage.getItem(LOCAL_STORAGE_KEY);
+            if (savedData) {
+                rawData = JSON.parse(savedData);
+            }
+        } catch (e) {
+            console.error("本地缓存读取失败", e);
+        }
+
+        // --- 2. 初始化图表实例 ---
+        const scatterChart = echarts.init(document.getElementById('scatter'), 'dark');
+        const treemapChart = echarts.init(document.getElementById('treemap'), 'dark');
+        const lineChart = echarts.init(document.getElementById('line'), 'dark');
+        const darkBg = { backgroundColor: 'transparent' };
+
+        // --- 3. 图表渲染主函数 ---
+        function renderCharts(data) {
+            // 控制无数据提示语的显示与隐藏
+            const hasData = data && data.length > 0;
+            document.getElementById('mask-scatter').style.display = hasData ? 'none' : 'block';
+            document.getElementById('mask-treemap').style.display = hasData ? 'none' : 'block';
+            document.getElementById('mask-line').style.display = hasData ? 'none' : 'block';
+
+            const scatterOption = {
+                ...darkBg,
+                title: { text: '投资回报与口碑分布 (支持框选)', left: 'center' },
+                tooltip: {
+                    formatter: function (p) {
+                        return `${p.data[0]}<br>类型: ${p.data[2]}<br>预算: ${p.data[4]}M<br>票房: ${p.data[5]}M<br>评分: ${p.data[6]}<br>投票: ${p.data[8]}`;
+                    }
+                },
+                toolbox: { feature: { brush: { type: ['rect', 'polygon', 'clear'] } } },
+                brush: { xAxisIndex: 'all', brushLink: 'all', outOfBrush: { colorAlpha: 0.1 } },
+                xAxis: { type: 'value', name: '制作预算 (百万)', splitLine: { show: false } },
+                yAxis: { type: 'value', name: '全球票房 (百万)', splitLine: { lineStyle: { type: 'dashed', opacity: 0.3 } } },
+                visualMap: {
+                    type: 'continuous', dimension: 6, min: 4.0, max: 9.5,
+                    text: ['高分(神作)', '低分(烂片)'], itemHeight: 160, right: 10, top: 'center',
+                    calculable: true, 
+                    inRange: { color: ['#ff2a2a', '#ff8800', '#ffe600', '#00cc44', '#00eeff'] },
+                    textStyle: { color: '#a0a7bd' }
+                },
+                series: [{
+                    type: 'scatter', data: data,
+                    encode: { x: 4, y: 5 },
+                    symbolSize: function (val) { return Math.max(Math.sqrt(val[8]||0) / 25, 4); },
+                    itemStyle: { opacity: 0.8, borderColor: '#fff', borderWidth: 1 }
+                }]
+            };
+
+            let typeMap = {};
+            data.forEach(d => {
+                if(!typeMap[d[2]]) typeMap[d[2]] = 0;
+                typeMap[d[2]] += parseFloat(d[5]) || 0;
+            });
+            let treeData = Object.keys(typeMap).map(k => ({ name: k, value: Math.round(typeMap[k]) }));
+
+            const treemapOption = {
+                ...darkBg,
+                title: { text: '电影类型市场总票房占比', left: 'center', textStyle: { fontSize: 14 } },
+                tooltip: { formatter: '{b}: {c} 百万' },
+                series: [{
+                    type: 'treemap', data: treeData, roam: false,
+                    nodeClick: false, breadcrumb: { show: false }, selectedMode: 'single',
+                    select: { itemStyle: { shadowBlur: 20, shadowOffsetX: 5, shadowOffsetY: 10, shadowColor: 'rgba(0,0,0,0.8)', borderColor: '#fff', borderWidth: 3 } },
+                    emphasis: { focus: 'self', itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.5)', borderColor: '#fff', borderWidth: 1 } },
+                    label: { show: true, formatter: '{b}\n\n{c} M' },
+                    itemStyle: { borderColor: '#1a2035', borderWidth: 2 }
+                }]
+            };
+
+            let yearMap = {};
+            data.forEach(d => {
+                let y = d[1];
+                if(!yearMap[y]) yearMap[y] = { bCount:0, bTotal:0, boxCount:0, boxTotal:0 };
+                yearMap[y].bTotal += parseFloat(d[4]) || 0; yearMap[y].bCount++;
+                yearMap[y].boxTotal += parseFloat(d[5]) || 0; yearMap[y].boxCount++;
+            });
+            let years = Object.keys(yearMap).sort();
+            let avgBudget = years.map(y => (yearMap[y].bTotal / yearMap[y].bCount).toFixed(2));
+            let avgBox = years.map(y => (yearMap[y].boxTotal / yearMap[y].boxCount).toFixed(2));
+
+            const lineOption = {
+                ...darkBg,
+                title: { text: '产业发展时序趋势 (平均成本 vs 票房)', left: 'center', textStyle: { fontSize: 14 } },
+                tooltip: { trigger: 'axis' },
+                legend: { data: ['均票房', '均成本'], bottom: 10 },
+                grid: { left: '10%', right: '10%', bottom: '25%', top: '20%' },
+                dataZoom: [{ type: 'slider', bottom: 0, height: 20 }],
+                xAxis: { type: 'category', data: years, boundaryGap: false },
+                yAxis: [
+                    { type: 'value', name: '金额 (百万)', splitLine: { lineStyle: { type: 'dashed', opacity: 0.1 } } }
+                ],
+                series: [
+                    { name: '均票房', type: 'line', data: avgBox, smooth: true, lineStyle: { width: 3, color: '#f39c12' } },
+                    { name: '均成本', type: 'line', yAxisIndex: 0, data: avgBudget, smooth: true, lineStyle: { width: 2, type: 'dashed', color: '#e74c3c' } }
+                ]
+            };
+
+            // 使用 notMerge 模式确保清空旧数据
+            scatterChart.setOption(scatterOption, true);
+            treemapChart.setOption(treemapOption, true);
+            lineChart.setOption(lineOption, true);
+        }
+
+        // 初次加载渲染（有缓存则渲染缓存，无缓存则渲染空坐标轴与提示语）
+        renderCharts(rawData);
+
+        // --- 4. 交互：监听散点图框选事件联动 ---
+        scatterChart.on('brushEnd', function (params) {
+            if (!params.areas.length) {
+                renderCharts(rawData); 
+                return;
+            }
+            let selectedIndices = params.areas[0].coordRange; 
+            let xRange = selectedIndices[0];
+            let yRange = selectedIndices[1];
+            
+            let filteredData = rawData.filter(d => {
+                let x = parseFloat(d[4]); let y = parseFloat(d[5]);
+                return x >= xRange[0] && x <= xRange[1] && y >= yRange[0] && y <= yRange[1];
+            });
+            
+            if(filteredData.length > 0) renderCharts(filteredData);
+        });
+
+        window.addEventListener('resize', () => {
+            scatterChart.resize(); treemapChart.resize(); lineChart.resize();
+        });
+
+        // --- 5. 动态读取、导入并保存 CSV 数据集 ---
+        document.getElementById('importBtn').addEventListener('click', () => {
+            document.getElementById('fileInput').click();
+        });
+
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const text = event.target.result;
+                parseAndLoadCSV(text); 
+            };
+            reader.readAsText(file);
+            e.target.value = ''; 
+        });
+
+        function parseAndLoadCSV(csvText) {
+            const lines = csvText.trim().split(/\r?\n/);
+            if (lines.length < 2) {
+                alert("数据集为空或格式不合法！");
+                return;
+            }
+            
+            const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
+            
+            const idxTitle = headers.findIndex(h => h.toLowerCase().includes('title') || h.includes('名称'));
+            const idxYear = headers.findIndex(h => h.toLowerCase().includes('year') || h.includes('年份'));
+            const idxGenre = headers.findIndex(h => h.toLowerCase().includes('genre') || h.includes('类型'));
+            const idxBudget = headers.findIndex(h => h.toLowerCase().includes('budget') || h.includes('预算'));
+            const idxBoxOffice = headers.findIndex(h => h.toLowerCase().includes('box_office') || h.includes('票房'));
+            const idxRating = headers.findIndex(h => h.toLowerCase().includes('imdb') || h.toLowerCase().includes('rating') || h.includes('评分'));
+            const idxVote = headers.findIndex(h => h.toLowerCase().includes('vote') || h.includes('投票'));
+            
+            let newData = [];
+            for(let i = 1; i < lines.length; i++) {
+                if(!lines[i].trim()) continue;
+                const cols = lines[i].split(',').map(c => c.trim().replace(/^"|"$/g, ''));
+                let row = [];
+                row[0] = idxTitle !== -1 ? cols[idxTitle] : `未知电影_${i}`;
+                row[1] = idxYear !== -1 ? cols[idxYear] : '2000';
+                row[2] = idxGenre !== -1 ? cols[idxGenre] : '未分类';
+                row[3] = 'USA'; 
+                row[4] = idxBudget !== -1 ? parseFloat(cols[idxBudget]) : 0;
+                row[5] = idxBoxOffice !== -1 ? parseFloat(cols[idxBoxOffice]) : 0;
+                row[6] = idxRating !== -1 ? parseFloat(cols[idxRating]) : 0;
+                row[7] = 0;
+                row[8] = idxVote !== -1 ? parseFloat(cols[idxVote]) : 0;
+                row[9] = 0;
+                
+                newData.push(row);
+            }
+            
+            if (newData.length > 0) {
+                rawData = newData;
+                // 将数据转化为JSON字符串存入浏览器的 LocalStorage
+                try {
+                    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(rawData));
+                } catch (e) {
+                    console.warn("本地存储可能超限，无法保存本次数据", e);
+                }
+                
+                renderCharts(rawData);
+                alert(`成功导入 ${newData.length} 条数据，图表已更新并保存！\n(下次打开页面将自动加载)`);
+            } else {
+                alert("未能解析出有效数据行！");
+            }
+        }
+
+        // --- 6. 导出 CSV 功能 ---
+        document.getElementById('exportBtn').addEventListener('click', function() {
+            if (!rawData || rawData.length === 0) {
+                alert("当前没有可导出的数据！");
+                return;
+            }
+            const headers = ['Title', 'Release_Year', 'Genre_Main', 'Country', 'Budget_M', 'Box_Office_M', 'IMDb_Rating', 'Rotten_Tomatoes', 'Vote_Count', 'Runtime_min'];
+            let csvContent = headers.join(',') + '\n';
+            rawData.forEach(row => { csvContent += row.join(',') + '\n'; });
+            const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url; link.setAttribute('download', 'movies_dataset.csv');
+            document.body.appendChild(link); link.click(); document.body.removeChild(link);
+        });
+    </script>
+</body>
+</html>
